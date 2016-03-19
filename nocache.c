@@ -13,6 +13,7 @@
 #include <sys/resource.h>
 #include <assert.h>
 #include <signal.h>
+#include <regex.h>
 
 #include "pageinfo.h"
 #include "fcntl_helpers.h"
@@ -21,8 +22,16 @@ static void init(void) __attribute__((constructor));
 static void destroy(void) __attribute__((destructor));
 static void init_mutex(void);
 static void init_debugging(void);
+static void init_cond(void);
+struct pattern_option {
+    int exists;
+    regex_t compiled;
+};
+static void init_cond1(char *env_pattern, struct pattern_option *pattern);
 static void handle_stdout(void);
 
+static void store_pageinfo_cond(const char *path, int fd);
+static int check_cond(const char *path);
 static void store_pageinfo(int fd);
 static void free_unclaimed_pages(int fd);
 
@@ -74,6 +83,10 @@ FILE *debugfp;
         } \
     } while(0)
 
+static char *env_pattern_pos = "NOCACHE_PATTERN_POS";
+static char *env_pattern_neg = "NOCACHE_PATTERN_NEG";
+struct pattern_option pattern_pos, pattern_neg;
+
 static void init(void)
 {
     int i;
@@ -115,6 +128,7 @@ static void init(void)
         fds[i].fd = -1;
     init_mutex();
     init_debugging();
+    init_cond();
     handle_stdout();
 }
 
@@ -132,6 +146,28 @@ static void init_debugging(void)
         return;
     debugfd = atoi(s);
     debugfp = fdopen(debugfd, "a");
+}
+
+static void init_cond(void)
+{
+    init_cond1(env_pattern_pos, &pattern_pos);
+    init_cond1(env_pattern_neg, &pattern_neg);
+}
+
+static void init_cond1(char *env_pattern, struct pattern_option *pattern)
+{
+    char *s;
+    if((s = getenv(env_pattern)) != NULL) {
+        if (regcomp(&pattern->compiled, s, REG_EXTENDED | REG_NOSUB)) {
+            pattern->exists = 0;
+            DEBUG("A pattern is incorrect.\n");
+        } else {
+            pattern->exists = -1;
+            DEBUG("A pattern is found.\n");
+        }
+    }
+    else
+        pattern->exists = 0;
 }
 
 /* duplicate stdout if it is a regular file. We will use this later to
@@ -155,6 +191,10 @@ static void handle_stdout(void)
 static void destroy(void)
 {
     int i;
+    if (pattern_pos.exists)
+        regfree(&pattern_pos.compiled);
+    if (pattern_neg.exists)
+        regfree(&pattern_neg.compiled);
     pthread_mutex_lock(&lock);
     for(i = 0; i < max_fds; i++) {
         if(fds[i].fd == -1)
@@ -180,7 +220,7 @@ int open(const char *pathname, int flags, mode_t mode)
     if((fd = _original_open(pathname, flags, mode)) != -1) {
         DEBUG("open(pathname=%s, flags=0x%x, mode=0%o) = %d\n",
             pathname, flags, mode, fd);
-        store_pageinfo(fd);
+        store_pageinfo_cond(pathname, fd);
     }
     return fd;
 }
@@ -196,7 +236,7 @@ int open64(const char *pathname, int flags, mode_t mode)
     DEBUG("open64(pathname=%s, flags=0x%x, mode=0%o)\n", pathname, flags, mode);
 
     if((fd = _original_open64(pathname, flags, mode)) != -1)
-        store_pageinfo(fd);
+        store_pageinfo_cond(pathname, fd);
     return fd;
 }
 
@@ -211,7 +251,7 @@ int creat(const char *pathname, int flags, mode_t mode)
     DEBUG("creat(pathname=%s, flags=0x%x, mode=0%o)\n", pathname, flags, mode);
 
     if((fd = _original_creat(pathname, flags, mode)) != -1)
-        store_pageinfo(fd);
+        store_pageinfo_cond(pathname, fd);
     return fd;
 }
 
@@ -226,7 +266,7 @@ int creat64(const char *pathname, int flags, mode_t mode)
     DEBUG("creat64(pathname=%s, flags=0x%x, mode=0%o)\n", pathname, flags, mode);
 
     if((fd = _original_creat64(pathname, flags, mode)) != -1)
-        store_pageinfo(fd);
+        store_pageinfo_cond(pathname, fd);
     return fd;
 }
 
@@ -241,7 +281,7 @@ int openat(int dirfd, const char *pathname, int flags, mode_t mode)
     DEBUG("openat(dirfd=%d, pathname=%s, flags=0x%x, mode=0%o)\n", dirfd, pathname, flags, mode);
 
     if((fd = _original_openat(dirfd, pathname, flags, mode)) != -1)
-        store_pageinfo(fd);
+        store_pageinfo_cond(pathname, fd);
     return fd;
 }
 
@@ -256,7 +296,7 @@ int openat64(int dirfd, const char *pathname, int flags, mode_t mode)
     DEBUG("openat64(dirfd=%d, pathname=%s, flags=0x%x, mode=0%o)\n", dirfd, pathname, flags, mode);
 
     if((fd = _original_openat64(dirfd, pathname, flags, mode)) != -1)
-        store_pageinfo(fd);
+        store_pageinfo_cond(pathname, fd);
     return fd;
 }
 
@@ -321,7 +361,7 @@ FILE *fopen(const char *path, const char *mode)
 
     if((fp = _original_fopen(path, mode)) != NULL)
         if((fd = fileno(fp)) != -1)
-            store_pageinfo(fd);
+            store_pageinfo_cond(path, fd);
 
     return fp;
 }
@@ -340,7 +380,7 @@ FILE *fopen64(const char *path, const char *mode)
 
     if((fp = _original_fopen64(path, mode)) != NULL)
         if((fd = fileno(fp)) != -1)
-            store_pageinfo(fd);
+            store_pageinfo_cond(path, fd);
 
     return fp;
 }
@@ -358,6 +398,19 @@ int fclose(FILE *fp)
 
     errno = EFAULT;
     return EOF;
+}
+
+/* store_pageinfo if path satisfies user's condition */
+static void store_pageinfo_cond(const char *path, int fd)
+{
+    if (check_cond(path))
+        store_pageinfo(fd);
+}
+
+static int check_cond(const char *path)
+{
+    return (pattern_pos.exists ? !regexec(&pattern_pos.compiled, path, 0, NULL, 0) : -1)
+        && !(pattern_neg.exists ? !regexec(&pattern_neg.compiled, path, 0, NULL, 0) : 0);
 }
 
 static void store_pageinfo(int fd)
