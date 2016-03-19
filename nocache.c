@@ -23,11 +23,7 @@ static void destroy(void) __attribute__((destructor));
 static void init_mutex(void);
 static void init_debugging(void);
 static void init_cond(void);
-struct pattern_option {
-    int exists;
-    regex_t compiled;
-};
-static void init_cond1(char *env_pattern, struct pattern_option *pattern);
+static regex_t *init_cond1(char *env_pattern);
 static void handle_stdout(void);
 
 static void store_pageinfo_cond(const char *path, int fd);
@@ -83,9 +79,10 @@ FILE *debugfp;
         } \
     } while(0)
 
-static char *env_pattern_pos = "NOCACHE_PATTERN_POS";
-static char *env_pattern_neg = "NOCACHE_PATTERN_NEG";
-struct pattern_option pattern_pos, pattern_neg;
+static char *env_pattern_include = "NOCACHE_PATTERN_INCLUDE";
+regex_t *pattern_include;
+static char *env_pattern_exclude = "NOCACHE_PATTERN_EXCLUDE";
+regex_t *pattern_exclude;
 
 static void init(void)
 {
@@ -150,24 +147,27 @@ static void init_debugging(void)
 
 static void init_cond(void)
 {
-    init_cond1(env_pattern_pos, &pattern_pos);
-    init_cond1(env_pattern_neg, &pattern_neg);
+    pattern_include = init_cond1(env_pattern_include);
+    pattern_exclude = init_cond1(env_pattern_exclude);
 }
 
-static void init_cond1(char *env_pattern, struct pattern_option *pattern)
+static regex_t *init_cond1(char *env_pattern)
 {
     char *s;
+    regex_t *pattern;
     if((s = getenv(env_pattern)) != NULL) {
-        if (regcomp(&pattern->compiled, s, REG_EXTENDED | REG_NOSUB)) {
-            pattern->exists = 0;
+        pattern = malloc(sizeof(regex_t));
+        if (regcomp(pattern, s, REG_EXTENDED | REG_NOSUB)) {
             DEBUG("A pattern is incorrect.\n");
+            free(pattern);
+            return NULL;
         } else {
-            pattern->exists = -1;
             DEBUG("A pattern is found.\n");
+            return pattern;
         }
     }
     else
-        pattern->exists = 0;
+        return NULL;
 }
 
 /* duplicate stdout if it is a regular file. We will use this later to
@@ -191,10 +191,12 @@ static void handle_stdout(void)
 static void destroy(void)
 {
     int i;
-    if (pattern_pos.exists)
-        regfree(&pattern_pos.compiled);
-    if (pattern_neg.exists)
-        regfree(&pattern_neg.compiled);
+    if (pattern_include)
+        regfree(pattern_include);
+    free(pattern_include);
+    if (pattern_exclude)
+        regfree(pattern_exclude);
+    free(pattern_exclude);
     pthread_mutex_lock(&lock);
     for(i = 0; i < max_fds; i++) {
         if(fds[i].fd == -1)
@@ -409,8 +411,8 @@ static void store_pageinfo_cond(const char *path, int fd)
 
 static int check_cond(const char *path)
 {
-    return (pattern_pos.exists ? !regexec(&pattern_pos.compiled, path, 0, NULL, 0) : -1)
-        && !(pattern_neg.exists ? !regexec(&pattern_neg.compiled, path, 0, NULL, 0) : 0);
+    return (pattern_include ? !regexec(pattern_include, path, 0, NULL, 0) : -1)
+        && !(pattern_exclude ? !regexec(pattern_exclude, path, 0, NULL, 0) : 0);
 }
 
 static void store_pageinfo(int fd)
