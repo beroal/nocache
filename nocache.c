@@ -157,6 +157,7 @@ static regex_t *init_cond1(char *env_pattern)
     regex_t *pattern;
     if((s = getenv(env_pattern)) != NULL) {
         pattern = malloc(sizeof(regex_t));
+	    assert(pattern != NULL);
         if (regcomp(pattern, s, REG_EXTENDED | REG_NOSUB)) {
             DEBUG("A pattern is incorrect.\n");
             free(pattern);
