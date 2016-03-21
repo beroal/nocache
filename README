@@ -22,10 +22,10 @@ Just type `make`. Then, prepend `./nocache` to your command:
     ./nocache cp -a ~/ /mnt/backup/home-$(hostname)
 
 You can select (filter, include, exclude) files which you want to cache
-based on their pathnames. The cache is disabled for a file iff (I and not E)
-where I iff the pathname satisfies the environment variable
-NOCACHE_PATTERN_INCLUDE (default: true), E iff the pathname satisfies
-the environment variable NOCACHE_PATTERN_EXCLUDE (default: false).
+based on their pathnames. The cache is disabled for a file iff (`I` and not `E`)
+where `I` iff the pathname satisfies the environment variable
+`NOCACHE_PATTERN_INCLUDE` (default: `true`), `E` iff the pathname satisfies
+the environment variable `NOCACHE_PATTERN_EXCLUDE` (default: `false`).
 Both variables are treated as POSIX Extended Regular Expressions.
 
 The command `make install` will install the shared library, man
