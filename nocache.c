@@ -157,7 +157,7 @@ static regex_t *init_cond1(char *env_pattern)
     regex_t *pattern;
     if((s = getenv(env_pattern)) != NULL) {
         pattern = malloc(sizeof(regex_t));
-	    assert(pattern != NULL);
+        assert(pattern != NULL);
         if (regcomp(pattern, s, REG_EXTENDED | REG_NOSUB)) {
             DEBUG("A pattern is incorrect.\n");
             free(pattern);
@@ -412,7 +412,7 @@ static void store_pageinfo_cond(const char *path, int fd)
 
 static int check_cond(const char *path)
 {
-    return (pattern_include ? !regexec(pattern_include, path, 0, NULL, 0) : -1)
+    return (pattern_include ? !regexec(pattern_include, path, 0, NULL, 0) : 1)
         && !(pattern_exclude ? !regexec(pattern_exclude, path, 0, NULL, 0) : 0);
 }
 
